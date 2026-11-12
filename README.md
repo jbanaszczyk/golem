@@ -6,13 +6,13 @@
 
 ## 1. Cel projektu
 
-Project Golem ma doprowadzić do realizacji zadań Jira, które przez wiele miesięcy pozostają w backlogu.
+Project Golem ma pomagać w realizacji zadań Jira, które przez wiele miesięcy pozostają w backlogu.
 
-Takie zadania często powstają przy okazji bieżącego developmentu. Opisy bywają skrótowe, bez formalnych acceptance criteria, i zakładają znajomość istniejącego kodu.
+Zadania te często powstają przy okazji bieżącego developmentu. Ich opisy bywają skrótowe, bez formalnych acceptance criteria, i zakładają znajomość istniejącego systemu.
 
-Golem ma klasyfikować zadania, analizować ich kontekst, przygotowywać rozwiązania, implementować je oraz współpracować z developerami przez GitHub PR.
+Golem wykorzystuje AI do klasyfikacji zadań, analizy wymagań, przygotowywania rozwiązań, implementacji oraz współpracy z developerami przez GitHub PR.
 
-**Główną miarą sukcesu jest liczba rzeczywiście zrealizowanych zadań, a nie liczba wygenerowanych analiz lub PR-ów.**
+**Główną miarą sukcesu jest liczba rzeczywiście zrealizowanych zadań, nie liczba wykonanych analiz ani wygenerowanych PR-ów.**
 
 ### 1.1. Środowisko
 
@@ -21,128 +21,124 @@ Golem ma klasyfikować zadania, analizować ich kontekst, przygotowywać rozwią
 - GitHub, Pull Requests, code ownership.
 - Istniejący CI: build, unit/integration/E2E tests, deployment, static analysis.
 - Jira z istniejącym workflow.
-- Jira Metadata, Memory Bank oraz indeksy tematyczne.
+- Istniejąca infrastruktura Jira Metadata, Memory Bank i indeksów tematycznych.
 
-## 2. Koncepcja rozwiązania
+## 2. Architektura i przepływ pracy
 
-### 2.1. Architektura
+### 2.1. Komponenty
 
-| Komponent              | Odpowiedzialność                                      |
-|------------------------|-------------------------------------------------------|
-| **Golem Orchestrator** | Selekcja, sterowanie, Git, GitHub, zdarzenia i koszty |
-| **L1 — Classifier**    | Klasyfikacja tematyczna i powiązane issues            |
-| **L2 — Analyst**       | Analiza kodu, wymagań i projektu rozwiązania          |
-| **L3 — Implementer**   | Implementacja, testy i poprawki                       |
+| Komponent | Odpowiedzialność |
+|---|---|
+| **Golem Orchestrator** | Selekcja issues, sterowanie, Git, GitHub, logowanie i koszty |
+| **L1 — Classifier** | Klasyfikacja tematyczna i powiązane issues |
+| **L2 — Analyst** | Zrozumienie zadania i przygotowanie rozwiązania |
+| **L3 — Implementer** | Implementacja, testy i poprawki |
 
-L1, L2 i L3 są odrębnymi wywołaniami Claude Code, z własnymi promptami i wynikami.
+L1, L2 i L3 są osobnymi wywołaniami Claude Code, z własnymi promptami i wynikami.
 
-Orchestrator wykonuje operacje deterministyczne bez wywoływania modelu. Może przejść przez kilka etapów podczas jednego uruchomienia.
+Orchestrator jest skryptem wykonującym operacje deterministyczne i uruchamiającym właściwe etapy AI. Jeżeli wynik pozwala kontynuować, następny etap może rozpocząć się w tym samym uruchomieniu Golema.
 
 ### 2.2. Główny przepływ
 
 ```mermaid
 flowchart TD
-    META["Jira Metadata"] --> ORCH["Golem Orchestrator"]
-    ORCH --> SELECT{"Candidate Selection"}
+    META["Jira Metadata"] --> SELECT{"Candidate Selection"}
+    SELECT -->|Eligible| L1["L1 — Classification"]
+    SELECT -->|Excluded| SKIP["Skip"]
 
-    SELECT -->|New issue| START["attempt_started"]
-    SELECT -->|Active attempt| NEXT{"Next stage"}
-    SELECT -->|Excluded / conflict| SKIP["Skip / Report"]
-    SELECT -->|Parked: manual resume| RESUME["resume_started"]
-
-    START --> L1["L1 — Classification"]
     L1 -->|l1_completed| TRIAGED["triaged"]
     TRIAGED --> L2["L2 — Analysis"]
 
-    NEXT -->|L2| L2
-    NEXT -->|L3| L3
-    NEXT -->|Parking| PARKING
-
-    RESUME --> PENDING["Prepare new branch<br/>State remains parked"]
-    PENDING --> L2
-
     L2 --> L2R{"L2 result"}
     L2R -->|l2_completed| READY["ready_for_l3"]
-    L2R -->|l2_clarification_required| CLARIFY["clarification_needed"]
-    L2R -->|Park decision| PARKING
+    L2R -->|l2_clarification_required| Q2["needs_clarification_l2"]
+
+    Q2 --> PR2["PR: golem:clarification_needed"]
+    PR2 --> FEEDBACK2["Developer feedback"]
+    FEEDBACK2 --> CMD2{"Developer command"}
+    CMD2 -->|golem:continue| TRIAGED
 
     READY --> L3["L3 — Implementation"]
     L3 --> L3R{"L3 result"}
-    L3R -->|l3_clarification_required| CLARIFY
-    L3R -->|l3_implementation_prepared<br/>Commit + PR registered| INREVIEW["in_review"]
-    L3R -->|Park decision| PARKING
 
-    CLARIFY --> QPR["Update Memory Bank and PR"]
-    QPR --> QLABEL["Label: golem:clarification_needed"]
-    QLABEL --> FEEDBACK["Developer feedback"]
-    FEEDBACK --> CONT["Label: golem:continue"]
-    CONT --> ORCH
+    L3R -->|l3_clarification_required| Q3["needs_clarification_l3"]
+    L3R -->|l3_reanalysis_required| TRIAGED
+    L3R -->|l3_implementation_prepared| REVIEW["in_review"]
 
-    INREVIEW --> CI["CI / GitHub PR"]
-    CI --> RLABEL["Label: golem:ready_for_review"]
-    RLABEL --> DECISION{"Developer decision"}
+    Q3 --> PR3["PR: golem:clarification_needed"]
+    PR3 --> FEEDBACK3["Developer feedback"]
+    FEEDBACK3 --> CMD3{"Developer command"}
+    CMD3 -->|golem:continue| READY
+
+    REVIEW --> CI["CI / PR: golem:ready_for_review"]
+    CI --> DECISION{"Developer decision"}
 
     DECISION -->|Merge implementation PR| MERGED["merged"]
-    MERGED --> DONE["Developer: Jira Done"]
+    DECISION -->|golem:continue| READY
 
-    DECISION -->|Changes + continue| FEEDBACK
+    CMD2 -->|golem:park| PARKING["parking"]
+    CMD3 -->|golem:park| PARKING
     DECISION -->|golem:park| PARKING
 
-    PARKING["parking<br/>Event: parking_started"] --> ARCHIVE["Archive unfinished code<br/>if present"]
-    ARCHIVE --> MB["Memory Bank: parked"]
-    MB --> DPR["Documentation PR<br/>No Golem labels"]
-    DPR --> DMERGE["Developer merges documentation PR"]
-    DMERGE --> PARKED["parked"]
+    PARKING --> ARCHIVE["Archive unfinished code if present"]
+    ARCHIVE --> MB["Prepare Memory Bank"]
+    MB --> DPR["Documentation PR — regular review"]
+    DPR --> DREVIEW{"Developer decision"}
 
-    PARKED -.->|Explicit manual resume| RESUME
+    DREVIEW -->|Merge| PARKED["parked"]
+    DREVIEW -->|Reject / close| REJECTED["Documentation discarded"]
+
+    MERGED --> END1(["End"])
+    PARKED --> END2(["End"])
+    REJECTED --> END3(["End"])
 
     classDef state fill:#e8eef9,stroke:#5575a5,color:#182b49
-    class TRIAGED,READY,CLARIFY,INREVIEW,PARKING,PARKED,MERGED state
+    class TRIAGED,READY,Q2,Q3,REVIEW,PARKING,PARKED,MERGED state
 ```
 
-### 2.3. Zasady
+Diagram pokazuje przejścia wynikające z pracy AI oraz poleceń developera.
 
-- Jira jest dla Golema źródłem danych tylko do odczytu.
-- Jira Gateway pozostaje jedynym mechanizmem pobierania danych z Jira API.
-- GitHub PR jest interfejsem komunikacji AI z developerem.
-- Golem tworzy branche, commity i PR-y.
-- **Merge do `develop` wykonuje wyłącznie developer.**
-- Developer odpowiada za poprawność i błędy przyjętego kodu.
-- Proces Golema jest uruchamiany manualnie.
-- Niezakończoną pracę można zaparkować, zachowując dokumentację i ewentualny kod.
+W szczególności:
 
-## 3. Git workflow i identyfikacja
+- `golem:continue` po pytaniu L2 wraca do `triaged`, skąd ponownie wykonywane jest L2.
+- `golem:continue` po pytaniu L3 wraca do `ready_for_l3`, skąd ponownie wykonywane jest L3.
+- `golem:continue` po code review również kieruje pracę do `ready_for_l3`.
+- L3 może wykryć konieczność ponownej analizy rozwiązania i skierować zadanie do L2.
+- `golem:park` jest poleceniem developera dostępnym przy otwartym PR wymagającym jego reakcji.
+
+`parked` i `merged` są terminalnymi stanami zakończonej pracy. Odrzucenie dokumentacyjnego PR również kończy dany przebieg, z usunięciem odrzuconych artefaktów.
+
+### 2.3. Code ownership
+
+Golem może tworzyć branche, commity i Pull Requests.
+
+**Merge do `develop` zawsze wykonuje developer.**
+
+Developer odpowiada za poprawność kodu wprowadzonego do projektu, w tym kodu wygenerowanego przez AI.
+
+## 3. Git workflow
 
 ### 3.1. Konwencje
 
-Podstawowym identyfikatorem zadania jest Jira key.
+Identyfikatorem zadania jest Jira key, np. `PROJECT-1234`.
 
 Wspólny basename:
 
 `PROJECT-1234-implement-anything`
 
-| Artefakt             | Przykład                                         |
-|----------------------|--------------------------------------------------|
-| Metadata             | `metadata/PROJECT-1234-implement-anything.yml`   |
-| Memory Bank          | `memory-bank/PROJECT-1234-implement-anything.md` |
-| AI branch            | `ai/PROJECT-1234-implement-anything`             |
-| Developer branch     | `PROJECT-1234-implement-anything`        |
-| Documentation branch | `docs/PROJECT-1234-implement-anything`           |
+| Artefakt | Nazwa |
+|---|---|
+| Metadata | `metadata/PROJECT-1234-implement-anything.yml` |
+| Memory Bank | `memory-bank/PROJECT-1234-implement-anything.md` |
+| Developer branch | `PROJECT-1234-implement-anything` |
+| AI branch | `ai/PROJECT-1234-implement-anything` |
+| Documentation branch | `docs/PROJECT-1234-implement-anything` |
 
-Commit messages rozpoczynają się od Jira key, np. `PROJECT-1234 Add validation tests`.
+Commit messages zaczynają się od Jira key, np. `PROJECT-1234 Add validation tests`.
 
-### 3.2. Branch lifecycle
+L1, L2 i L3 pracują na jednym branchu AI. Po merge developer usuwa branch standardowym mechanizmem GitHub.
 
-L1, L2 i L3 pracują na tym samym branchu zadania.
-
-Po zaakceptowanym merge developer usuwa branch przez GitHub.
-
-Przy parkowaniu branch AI może zostać usunięty po zabezpieczeniu snapshotu kodu. Wznowienie tworzy nowy branch z aktualnego `develop`.
-
-### 3.3. Release
-
-> [!NOTE]
-> Zgodnie z aktualnym flow
+### 3.2. Release
 
 Release odbywa się raz w miesiącu:
 
@@ -152,31 +148,25 @@ Release odbywa się raz w miesiącu:
 
 Istniejąca procedura release musi uwzględniać również otwarte PR-y Golema.
 
-## 4. Dane wejściowe i artefakty
+## 4. Istniejące źródła danych
 
 ### 4.1. Jira Metadata
 
-> [!NOTE]
-> Ten fragment infrastruktury już mamy
-
-Istniejący Jira Gateway pobiera:
+Istniejący Jira Gateway pobiera dane Jira do lokalnych plików YAML, obejmujących m.in.:
 
 - Jira key, title, description.
 - Labels, epic, attachments.
-- Status workflow i pozostałe dostępne metadata.
+- Status workflow i pozostałe metadata.
 
-Golem korzysta z lokalnego snapshotu i nie zapisuje zmian do Jira.
+Golem korzysta z lokalnych plików, a Jira Gateway pozostaje jedynym mechanizmem dostępu do Jira API.
 
-`In Progress` oraz `Done` pozostają pod kontrolą developerów.
+Statusy `In Progress` i `Done` pozostają pod kontrolą developerów.
 
 ### 4.2. Memory Bank
 
-> [!NOTE]
-> Ten fragment infrastruktury już mamy
-
 Memory Bank jest wspólnym artefaktem AI i zwykłego developmentu.
 
-Podstawowe sekcje:
+Standardowe sekcje:
 
 - **Context**
 - **Solution**
@@ -184,14 +174,11 @@ Podstawowe sekcje:
 - **Decisions**
 - **References**
 
-W trakcie pracy mogą występować również AI Findings, Assumptions, Open Questions oraz Parked Reason.
+Podczas analizy mogą występować również AI Findings, Assumptions, Open Questions oraz Parked Reason.
 
-Finalny dokument opisuje rzeczywisty rezultat, bez utrzymywania nieaktualnych pytań.
+Finalny dokument opisuje rzeczywisty rezultat pracy. Może odwoływać się do wcześniejszych issues, PR-ów i ustaleń developerskich.
 
 ### 4.3. Labels i indeksy
-
-> [!NOTE]
-> Ten fragment infrastruktury (indeksowanie) już mamy
 
 `labels` pochodzą z Jira.
 
@@ -199,561 +186,396 @@ Finalny dokument opisuje rzeczywisty rezultat, bez utrzymywania nieaktualnych py
 
 `effective_labels = labels ∪ ai_labels`
 
-Indeksy YAML znajdują się w `metadata/indexes/`. Obejmują `develop` i aktywne branche oraz zachowują dotychczasowy model fuzzy consistency.
+Istniejące indeksy YAML znajdują się w `metadata/indexes/`. Obejmują `develop` i aktywne branche oraz zachowują dotychczasowy model fuzzy consistency.
 
 Porządkowanie indeksów i taksonomii odbywa się przy release.
 
-## 5. Kontrakt wyników L1/L2/L3
+## 5. Kontrakt L1/L2/L3
 
-Każde wywołanie AI zwraca jednoznaczny wynik. Orchestrator weryfikuje go przed zapisaniem zdarzenia potwierdzającego zakończenie etapu.
+Każde wywołanie AI zwraca jednoznaczny rezultat, który orchestrator interpretuje i wykorzystuje do wyboru kolejnego etapu.
 
-| Etap | Wynik                                | Zdarzenie                    |
-|------|--------------------------------------|------------------------------|
-| L1   | Klasyfikacja zakończona              | `l1_completed`               |
-| L1   | Niepowodzenie                        | `l1_failed`                  |
-| L2   | Kontekst gotowy do implementacji     | `l2_completed`               |
-| L2   | Potrzebna decyzja developera         | `l2_clarification_required`  |
-| L2   | Niepowodzenie                        | `l2_failed`                  |
-| L3   | Implementacja przygotowana do review | `l3_implementation_prepared` |
-| L3   | Potrzebna decyzja developera         | `l3_clarification_required`  |
-| L3   | Niepowodzenie                        | `l3_failed`                  |
+| Etap | Zdarzenie | Znaczenie |
+|---|---|---|
+| L1 | `l1_completed` | Klasyfikacja zakończona |
+| L1 | `l1_failed` | Niepowodzenie |
+| L2 | `l2_completed` | Rozwiązanie gotowe do implementacji |
+| L2 | `l2_clarification_required` | Potrzebna decyzja developera |
+| L2 | `l2_failed` | Niepowodzenie |
+| L3 | `l3_implementation_prepared` | Implementacja przygotowana do review |
+| L3 | `l3_clarification_required` | Potrzebna decyzja developera |
+| L3 | `l3_reanalysis_required` | Konieczna ponowna analiza L2 |
+| L3 | `l3_failed` | Niepowodzenie |
 
-Wyniki powodujące niepowodzenie techniczne nie ustanawiają nowego stanu zadania.
+### 5.1. L1 — Classification
 
-`l3_implementation_prepared` oznacza przygotowany kod i testy. Nie oznacza pozytywnego CI, akceptacji review ani merge.
+L1 identyfikuje temat zadania, przypisuje `ai_labels`, znajduje powiązane issues i potencjalne duplikaty.
 
-## 6. GitHub PR jako interfejs sterowania
+Po zakończeniu L1 zadanie przechodzi do `triaged`.
+
+Orchestrator może bezpośrednio uruchomić L2.
+
+### 5.2. L2 — Context Refinement
+
+L2 analizuje wymagania w kontekście aktualnego kodu, testów, dokumentacji i powiązanych Memory Banków.
+
+Przygotowuje rozwiązanie nadające się do implementacji albo pytania wymagające decyzji developera.
+
+Po `l2_completed` zadanie przechodzi do `ready_for_l3`.
+
+Po `l2_clarification_required` przechodzi do `needs_clarification_l2`, a Golem publikuje pytania w PR.
+
+Gdy developer odpowie i ustawi `golem:continue`, praca wraca do `triaged` i L2 jest uruchamiane ponownie. Jeśli odpowiedź nadal jest niewystarczająca, L2 ponownie zwraca `l2_clarification_required`.
+
+### 5.3. L3 — Implementation
+
+L3 implementuje Proposed Solution, dodaje testy, wykonuje lokalną weryfikację i przygotowuje Implementation Notes.
+
+Możliwe wyniki:
+
+- `l3_implementation_prepared` — kod gotowy do review.
+- `l3_clarification_required` — potrzebna decyzja developera.
+- `l3_reanalysis_required` — należy ponownie uruchomić L2, ponieważ aktualne rozwiązanie wymaga weryfikacji lub zmiany.
+- `l3_failed` — wywołanie zakończone niepowodzeniem.
+
+Po `l3_clarification_required` developer odpowiada przez PR. `golem:continue` kieruje zadanie do `ready_for_l3`, po czym L3 ponownie ocenia odpowiedź i kontynuuje pracę.
+
+Po `l3_reanalysis_required` zadanie wraca do `triaged` i wykonywane jest L2. Wynikiem L2 może być zarówno `l2_completed`, jak i `l2_clarification_required`.
+
+To samo dotyczy ponownej analizy koniecznej po uwagach z code review.
+
+### 5.4. Przetwarzanie od początku do końca
+
+**Golem może samodzielnie przeprowadzić całe zadanie od L1 do L3 w jednym uruchomieniu.**
+
+Jeżeli:
+
+1. L1 zakończy klasyfikację,
+2. L2 ustali rozwiązanie bez pytań blokujących,
+3. L3 przygotuje implementację i testy,
+
+orchestrator wykonuje kolejno wszystkie trzy etapy, aktualizuje Memory Bank, tworzy lub aktualizuje PR i ustawia `golem:ready_for_review`.
+
+Developer otrzymuje wtedy gotową propozycję implementacji do review, bez konieczności odpowiadania na pytania podczas analizy.
+
+Interakcja z developerem jest potrzebna dopiero wtedy, gdy AI zidentyfikuje brakującą decyzję albo gdy implementacja trafi do review.
+
+## 6. GitHub PR — komunikacja z developerem
 
 ### 6.1. Labels
 
-| Label                        | Ustawia   | Znaczenie                             |
-|------------------------------|-----------|---------------------------------------|
-| `golem:clarification_needed` | Golem     | Oczekiwanie na informację lub decyzję |
-| `golem:ready_for_review`     | Golem     | Wynik przygotowany do review          |
-| `golem:continue`             | Developer | Uwzględnij feedback i kontynuuj       |
-| `golem:park`                 | Developer | Przygotuj parkowanie                  |
+| Label | Ustawia | Znaczenie |
+|---|---|---|
+| `golem:clarification_needed` | Golem | Oczekiwanie na informację lub decyzję |
+| `golem:ready_for_review` | Golem | Implementacja przygotowana do review |
+| `golem:continue` | Developer | Uwzględnij feedback i kontynuuj |
+| `golem:park` | Developer | Przygotuj parkowanie |
 
-### 6.2. Clarification i review
+Dwa pierwsze labels informują developera o wyniku pracy. Pozostałe dwa są poleceniami.
 
-Golem zapisuje pytania w Memory Banku, aktualizuje PR i ustawia odpowiedni label.
+### 6.2. Clarification
 
-Developer odpowiada przez komentarze, suggestions lub zmiany w branchu.
+Golem zapisuje pytania w Memory Banku i publikuje je przez PR.
 
-Następnie ustawia `golem:continue`.
+Developer odpowiada komentarzem, suggestion lub zmianą w branchu i ustawia `golem:continue`.
 
-Orchestrator odczytuje nowe informacje i uruchamia właściwy etap L2 albo L3.
+Następny etap zależy od stanu:
 
-GitHub Request changes i zwykłe komentarze są równoważnymi źródłami feedbacku.
+| Stan | `golem:continue` |
+|---|---|
+| `needs_clarification_l2` | Powrót do `triaged`, ponowne L2 |
+| `needs_clarification_l3` | Powrót do `ready_for_l3`, ponowne L3 |
+| `in_review` | Powrót do `ready_for_l3`, ponowne L3 |
 
-### 6.3. Wykonanie poleceń
+L3 może podczas ponownej pracy zgłosić `l3_reanalysis_required`, co kieruje zadanie do L2.
 
-Polecenia są identyfikowane na podstawie zdarzeń dodania labela w GitHub.
+### 6.3. Code review
 
-Orchestrator zapisuje identyfikator obsługiwanego zdarzenia, wykonuje polecenie i usuwa label.
+Po L3 Golem ustawia `golem:ready_for_review`.
 
-Ponowne dodanie labela tworzy nowe polecenie. Ponowienie uruchomienia dla tego samego zdarzenia nie może prowadzić do powtórzenia zakończonej operacji.
+Developer może wykonać merge, zgłosić komentarze lub Request changes, samodzielnie poprawić kod, ustawić `golem:continue` albo `golem:park`.
+
+Feedback z code review jest przekazywany do kolejnego wywołania L3.
+
+### 6.4. Parkowanie
+
+`golem:park` może zostać ustawione na PR w stanie:
+
+- `needs_clarification_l2`
+- `needs_clarification_l3`
+- `in_review`
+
+Przyjęcie tego polecenia rozpoczyna procedurę `parking`.
+
+### 6.5. Obsługa poleceń
+
+Orchestrator odczytuje polecenia GitHub podczas uruchomienia Golema.
+
+Dla `golem:continue` albo `golem:park` wykonuje odpowiednią operację i usuwa obsłużony label.
+
+**Propozycja implementacyjna:** w Journalu można przechowywać `source_event_id` identyfikujący dodanie labela, aby rozróżniać kolejne polecenia od ponownego odczytania tego samego zdarzenia.
 
 ## 7. Canonical Task State
 
 ### 7.1. Definicja
 
-**`golem_state` jest jedynym kanonicznym stanem zadania.**
+`golem_state` jest kanonicznym stanem zadania, ustalanym przez orchestrator na podstawie Memory Banku i rzeczywistych danych GitHub.
 
-Stan jest wyliczany przez orchestrator na podstawie potwierdzonych zdarzeń i aktualnych danych GitHub.
-
-Nie jest ręcznie edytowany.
-
-Memory Bank przechowuje ostatni wynik AI (`ai_status`), natomiast trwały dziennik orkiestratora przechowuje zdarzenia i identyfikatory aktualnej pracy.
+`ai_status` we frontmatter przechowuje checkpoint pracy AI. GitHub potwierdza stan PR i faktyczny merge.
 
 ### 7.2. Stany
 
-| `golem_state`          | Znaczenie                                  |
-|------------------------|--------------------------------------------|
-| `not_started`          | Brak rozpoczętej pracy Golema              |
-| `triaged`              | L1 zakończone                              |
-| `clarification_needed` | Potrzebna decyzja dla L2 lub L3            |
-| `ready_for_l3`         | Analiza wystarcza do implementacji         |
-| `in_review`            | Przygotowana implementacja i otwarty PR    |
-| `parking`              | Trwa procedura parkowania                  |
-| `parked`               | Dokumentacja parkowania zmergowana         |
-| `merged`               | Implementacyjny PR zmergowany do `develop` |
+| `golem_state` | Znaczenie |
+|---|---|
+| `not_started` | Brak rozpoczętej pracy Golema |
+| `triaged` | L1 zakończone; można wykonać L2 |
+| `needs_clarification_l2` | L2 oczekuje na odpowiedź developera |
+| `ready_for_l3` | L2 zakończone; można wykonać L3 |
+| `needs_clarification_l3` | L3 oczekuje na odpowiedź developera |
+| `in_review` | Implementacja oczekuje na review |
+| `parking` | Trwa przygotowanie i review dokumentacji parkowania |
+| `parked` | Dokumentacyjny PR zmergowany |
+| `merged` | Implementacyjny PR zmergowany do `develop` |
 
-`merged` odnosi się wyłącznie do implementacji.
-
-Merge dokumentacyjnego PR oznacza `parked`, a nie `merged`.
+`parked` i `merged` są terminalnymi stanami pracy.
 
 ### 7.3. Przejścia
 
-| Zdarzenie                                 | Stan wynikowy          |
-|-------------------------------------------|------------------------|
-| `l1_completed`                            | `triaged`              |
-| `l2_completed`                            | `ready_for_l3`         |
-| `l2_clarification_required`               | `clarification_needed` |
-| `l3_implementation_prepared` + otwarty PR | `in_review`            |
-| `l3_clarification_required`               | `clarification_needed` |
-| Rozpoczęcie parkowania                    | `parking`              |
-| Merge dokumentacyjnego PR                 | `parked`               |
-| Merge implementacyjnego PR                | `merged`               |
+| Stan początkowy | Zdarzenie lub polecenie | Stan wynikowy |
+|---|---|---|
+| `not_started` | `l1_completed` | `triaged` |
+| `triaged` | `l2_completed` | `ready_for_l3` |
+| `triaged` | `l2_clarification_required` | `needs_clarification_l2` |
+| `needs_clarification_l2` | `golem:continue` | `triaged` |
+| `ready_for_l3` | `l3_implementation_prepared` i PR | `in_review` |
+| `ready_for_l3` | `l3_clarification_required` | `needs_clarification_l3` |
+| `ready_for_l3` | `l3_reanalysis_required` | `triaged` |
+| `needs_clarification_l3` | `golem:continue` | `ready_for_l3` |
+| `in_review` | `golem:continue` | `ready_for_l3` |
+| `in_review` | Merge implementacyjnego PR | `merged` |
+| `needs_clarification_l2` | `golem:park` | `parking` |
+| `needs_clarification_l3` | `golem:park` | `parking` |
+| `in_review` | `golem:park` | `parking` |
+| `parking` | Merge dokumentacyjnego PR | `parked` |
+| `parking` | Odrzucenie dokumentacyjnego PR | Zakończenie pracy i usunięcie odrzuconych artefaktów |
 
-Polecenie `golem:continue` samo w sobie nie zmienia stanu. Zmiana następuje po potwierdzeniu wyniku kolejnego etapu.
+Powrót L3 do L2 jest dwustopniowy:
 
-### 7.4. Kolejne próby realizacji
+`ready_for_l3 → triaged → L2`
 
-Jedno Jira issue może być opracowywane więcej niż raz.
+Następnie L2 może zwrócić:
+
+- `l2_completed` → `ready_for_l3`
+- `l2_clarification_required` → `needs_clarification_l2`
+
+Dotyczy to również sytuacji, gdy potrzeba ponownej analizy została wykryta podczas poprawiania kodu po review.
+
+Pełny przepływ jest przedstawiony w diagramie 2.2.
+
+### 7.4. `ai_status`
+
+| `ai_status` | Znaczenie |
+|---|---|
+| `triaged` | L1 zakończone albo powrót do L2 |
+| `needs_clarification_l2` | L2 oczekuje na decyzję |
+| `ready_for_l3` | L2 zakończone albo powrót do L3 |
+| `needs_clarification_l3` | L3 oczekuje na decyzję |
+| `implemented` | L3 przygotowało implementację |
+| `parked` | Przygotowano dokumentację parkowania |
+
+Orchestrator aktualizuje checkpoint przy wykonywaniu przejść. Przy `golem:continue` wraca do odpowiedniego punktu wejścia (`triaged` lub `ready_for_l3`), a następny wynik agenta ustala kolejny stan.
 
 Przykład:
-
-- Próba 1: L1 → L2 → L3 → `parked`.
-- Developer merguje dokumentacyjny PR.
-- Po kilku miesiącach operator zleca resume.
-- Próba 2: nowy branch → L2 → L3 → `merged`.
-
-Techniczny numer `attempt` rozróżnia te próby:
-
-- Pierwsza próba ma `attempt: 1`.
-- Każde jawne wznowienie po `parked` otrzymuje następny numer.
-- Numer nie jest statusem ani identyfikatorem Jira.
-- Zdarzenia, PR-y i snapshoty kodu są przypisane do konkretnej próby.
-
-W ten sposób wcześniejszy merge dokumentacyjnego PR nie przesłania późniejszej pracy.
-
-### 7.5. Diagram
-
-```mermaid
-stateDiagram-v2
-    direction TB
-
-    [*] --> not_started
-
-    not_started --> triaged: l1_completed
-
-    triaged --> ready_for_l3: l2_completed
-    triaged --> needs_clarification_l2: l2_clarification_required
-
-    needs_clarification_l2 --> needs_clarification_l2: Continue / l2_clarification_required
-    needs_clarification_l2 --> ready_for_l3: Continue / l2_completed
-
-    ready_for_l3 --> needs_clarification_l3: l3_clarification_required
-    ready_for_l3 --> in_review: l3_implementation_prepared + PR open
-
-    needs_clarification_l3 --> needs_clarification_l3: Continue / l3_clarification_required
-    needs_clarification_l3 --> in_review: Continue / l3_implementation_prepared
-    needs_clarification_l3 --> ready_for_l3: Reanalysis / l2_completed
-    needs_clarification_l3 --> needs_clarification_l2: Reanalysis / l2_clarification_required
-
-    in_review --> in_review: Continue / corrections completed
-    in_review --> needs_clarification_l3: l3_clarification_required
-    in_review --> needs_clarification_l2: Reanalysis / l2_clarification_required
-    in_review --> ready_for_l3: Reanalysis / l2_completed
-    in_review --> merged: Implementation PR merged
-
-    triaged --> parking: parking_started
-    ready_for_l3 --> parking: parking_started
-    needs_clarification_l2 --> parking: parking_started
-    needs_clarification_l3 --> parking: parking_started
-    in_review --> parking: parking_started
-
-    parking --> parked: Documentation PR merged
-
-    parked --> [*]
-    merged --> [*]
-
-    note right of parked
-        Terminal state for this attempt.
-        Explicit resume starts a new attempt at L1.
-        Previous results are reference material only.
-    end note
-```
-
-## 8. Trwały kontrakt danych stanu
-
-### 8.1. Podział odpowiedzialności
-
-Dane stanu mają trzy warstwy:
-
-| Warstwa                    | Zawartość                                            | Rola                          |
-|----------------------------|------------------------------------------------------|-------------------------------|
-| **Memory Bank**            | Wynik AI, kontekst, decyzje, informacje o parkowaniu | Dokumentacja zadania          |
-| **Golem Event Journal**    | Zdarzenia, próby, operacje i powiązania z PR         | Trwała historia orkiestratora |
-| **GitHub / Jira Metadata** | Rzeczywisty merge, PR lifecycle, status Jira         | Zewnętrzne źródła faktów      |
-
-`golem_state` jest projekcją tych danych, a nie czwartym niezależnym zapisem.
-
-### 8.2. Identyfikacja
-
-Każde zdarzenie zawiera:
-
-| Pole              | Typ              | Znaczenie                            |
-|-------------------|------------------|--------------------------------------|
-| `schema_version`  | integer          | Wersja kontraktu                     |
-| `event_id`        | string           | Unikalny identyfikator zdarzenia     |
-| `issue_key`       | string           | Jira key                             |
-| `attempt`         | integer          | Numer próby realizacji               |
-| `sequence`        | integer          | Kolejność zdarzenia w historii issue |
-| `type`            | string           | Typ zdarzenia                        |
-| `recorded_at`     | UTC timestamp    | Czas zapisania                       |
-| `invocation_id`   | string, optional | Wywołanie Claude Code                |
-| `source_event_id` | string, optional | Identyfikator zdarzenia zewnętrznego |
-| `refs`            | object, optional | Powiązany branch, SHA, PR lub tag    |
-
-`event_id` zapewnia idempotencję zapisu.
-
-`source_event_id` pozwala rozpoznać ponowne odczytanie tego samego zdarzenia GitHub.
-
-`sequence` jest nadawany atomowo przez orchestrator w zakresie Jira issue. O kolejności jego własnych zdarzeń rozstrzyga `sequence`, nie porównanie timestampów z różnych systemów.
-
-### 8.3. Przykładowe zdarzenie
-
-```yaml
-schema_version: 1
-event_id: 01JABCDEF0123456789ABCDEFGH
-issue_key: PROJECT-1234
-attempt: 2
-sequence: 37
-type: l2_completed
-recorded_at: "2026-11-12T00:45:00Z"
-invocation_id: l2-20261112-0045
-
-refs:
-  branch: ai/PROJECT-1234-implement-anything
-  commit: a1b2c3d4e5f678901234567890abcdef12345678
-  implementation_pr: 1842
-```
-
-Pola `refs` są zależne od rodzaju zdarzenia. Dla ukończonego etapu zapisuje się SHA commitu zawierającego zaakceptowany wynik.
-
-Zdarzenie ukończenia etapu jest rejestrowane dopiero po trwałym zapisaniu jego rezultatu.
-
-### 8.4. Typy zdarzeń
-
-Zdarzenia wpływające na lifecycle:
-
-| `type`                       | Znaczenie                               |
-|------------------------------|-----------------------------------------|
-| `attempt_started`            | Rozpoczęto pierwszą próbę               |
-| `l1_completed`               | Potwierdzono wynik L1                   |
-| `l2_completed`               | Potwierdzono gotowość do L3             |
-| `l2_clarification_required`  | L2 wymaga decyzji                       |
-| `l3_implementation_prepared` | L3 przygotowało implementację i PR      |
-| `l3_clarification_required`  | L3 wymaga decyzji                       |
-| `parking_started`            | Przyjęto decyzję o parkowaniu           |
-| `resume_started`             | Rozpoczęto przygotowanie kolejnej próby |
-
-Zdarzenia techniczne, np. `pr_registered`, `park_archive_created`, `command_accepted`, `command_completed`, `phase_failed` i `conflict_detected`, zapisują postęp i wynik operacji.
-
-**Merge pozostaje faktem GitHub.** Journal może zapisać jego zaobserwowanie, ale nie jest uprawniony do deklarowania merge bez potwierdzenia w GitHub.
-
-### 8.5. Powiązanie PR z zadaniem
-
-Dla każdego PR orchestrator zapisuje:
-
-- `issue_key`.
-- `attempt`.
-- `kind`: `implementation` albo `documentation`.
-- Repozytorium i GitHub PR number.
-- Pełny URL.
-- Head branch i commit SHA przy rejestracji.
-- Base branch.
-
-PR jest identyfikowany przez repozytorium i numer GitHub PR, nie przez samą nazwę brancha.
-
-Rozróżnienie `kind` jest obowiązkowe, ponieważ tylko merge PR `implementation` może ustanowić `merged`.
-
-### 8.6. Kontrakt Memory Banku
-
-Memory Bank zachowuje dotychczasowy frontmatter.
-
-Przykład dla aktywnej pracy:
 
 ```yaml
 ---
 jira: PROJECT-1234
-labels:
-  - api
-  - validation
-ai_labels:
-  - backward_compatibility
-
-ai_status: ready_for_l3
-golem_attempt: 2
+ai_status: implemented
 pull_request: https://github.com/example-org/example-repo/pull/1842
 ---
 ```
 
-`golem_attempt` wiąże zapisany wynik z odpowiednią próbą.
+Dla otwartego PR kanoniczny stan wynosi `in_review`.
 
-Dopuszczalne wartości `ai_status`:
+Po merge implementacyjnego PR wynosi `merged`, podczas gdy Memory Bank zachowuje `ai_status: implemented`.
 
-| `ai_status`              | Znaczenie                               |
-|--------------------------|-----------------------------------------|
-| `triaged`                | Wynik L1                                |
-| `ready_for_l3`           | Wynik L2                                |
-| `needs_clarification_l2` | Pytania L2                              |
-| `needs_clarification_l3` | Pytania L3                              |
-| `implemented`            | Wynik L3                                |
-| `parked`                 | Dokumentacja przygotowana do parkowania |
+## 8. Event Journal
 
-`ai_status` jest checkpointem dokumentacyjnym. Nie reprezentuje faktu merge i nie jest edytowany w celu odzwierciedlenia GitHub PR state.
+### 8.1. Przeznaczenie
 
-Dla `parked` dopuszczalny jest dodatkowy `parked_code` z tagiem i SHA.
+Golem prowadzi własny Journal, w którym zapisuje:
 
-### 8.7. Przechowywanie Event Journal
+- Wywołania L1, L2 i L3.
+- Modele, czas wykonania, tokeny i koszty.
+- Wyniki oraz błędy.
+- Powiązane Jira keys, commity i PR-y.
+- Operacje orkiestratora, w tym obsługę GitHub labels.
 
-Journal musi przetrwać:
+### 8.2. Przechowywanie
 
-- Usunięcie AI brancha.
-- Zamknięcie PR.
-- Parkowanie i wznowienie.
-- Odtworzenie `develop`.
-- Przerwanie i ponowne uruchomienie orchestratora.
+Journal jest przechowywany w miejscu dostępnym dla Golem Orchestratora, niezależnym od repozytorium projektu.
 
-Dlatego nie może być przechowywany wyłącznie na krótkotrwałym branchu roboczym.
+Możliwe formy: katalog z plikami YAML/JSONL albo baza danych.
 
-Kontrakt logiczny: **append-only journal per Jira issue**, trwale dostępny między uruchomieniami Golema.
+Wybór należy do implementacji.
 
-Format może być JSONL, z jednym zdarzeniem w rekordzie. Lokalizacja jest konfigurowalna, ale musi zapewniać trwałość, atomowy zapis i blokowanie równoległych modyfikacji tego samego issue.
+### 8.3. Przykładowy rekord
 
-Zmiana wcześniejszego zdarzenia nie jest normalną operacją. Korekta jest zapisywana jako kolejne zdarzenie.
+```yaml
+issue_key: PROJECT-1234
+phase: L2
+model: claude-sonnet
+started_at: "2026-11-12T00:40:00Z"
+finished_at: "2026-11-12T00:45:00Z"
+result: l2_completed
 
-### 8.8. Ustalanie aktualnej próby
+cost:
+  input_tokens: 12000
+  output_tokens: 3500
+  usd: 0.09
 
-Dla issue bez wcześniejszej pracy używany jest `attempt: 1`.
+git:
+  branch: ai/PROJECT-1234-implement-anything
+  commit: a1b2c3d4e5f678901234567890abcdef12345678
 
-Po `parked` operator może rozpocząć resume. Orchestrator rezerwuje kolejny numer `attempt` i zapisuje `resume_started`.
+pull_request: https://github.com/example-org/example-repo/pull/1842
+```
 
-**Nowa próba staje się aktualna po potwierdzeniu pierwszego wyniku L1/L2/L3.**
+Dokładna reprezentacja kosztów zależy od danych udostępnianych przez Claude Code.
 
-Do tego momentu ostatni potwierdzony stan pozostaje `parked`. Niedokończone resume jest widoczne w historii operacji.
+Opcjonalne `source_event_id` może służyć identyfikacji zdarzeń GitHub wywołujących polecenia Golema.
 
-Po aktywacji nowej próby:
+### 8.4. Niepowodzenia
 
-- Jej wynik służy do wyznaczania aktualnego stanu.
-- Historyczne PR-y wcześniejszych prób pozostają referencjami.
-- Wcześniejszy dokumentacyjny merge nie ustanawia `parked` dla nowej próby.
-- Archiwalny tag może służyć jako źródło kodu referencyjnego.
+Jeśli L3 zakończy się błędem przed zapisaniem implementacji w commicie, kolejne wykonanie rozpoczyna L3 od nowa.
 
-Stan `merged` jest końcowy dla issue. Jego ponowna realizacja wymaga nowego zadania Jira.
+Jeśli commit istnieje, ale publikacja PR nie została zakończona, orchestrator może dokończyć operację GitHub.
 
-### 8.9. Reguły wyznaczania `golem_state`
-
-Dla aktualnej próby:
-
-| Warunek                                                  | `golem_state`          |
-|----------------------------------------------------------|------------------------|
-| Potwierdzony merge implementacyjnego PR                  | `merged`               |
-| Potwierdzony merge dokumentacyjnego PR parkowania        | `parked`               |
-| `parking_started`, bez zakończenia parkowania            | `parking`              |
-| Ostatni zaakceptowany wynik L2/L3 wymaga decyzji         | `clarification_needed` |
-| L3 przygotowało implementację i właściwy PR jest otwarty | `in_review`            |
-| Ostatni zaakceptowany wynik L2 to `l2_completed`         | `ready_for_l3`         |
-| Ostatni zaakceptowany wynik L1 to `l1_completed`         | `triaged`              |
-| Brak zaakceptowanego wyniku                              | `not_started`          |
-
-Reguły są oceniane w kolejności określonej powyżej, ale wyłącznie dla zdarzeń i PR-ów przypisanych do właściwej próby.
-
-Jeśli operacja resume została rozpoczęta, lecz nie ustanowiła jeszcze nowej aktualnej próby, zachowany zostaje stan poprzedniej próby.
-
-Nieaktualny indeks lub historyczny label nie może nadpisać potwierdzonego wyniku.
-
-### 8.10. Spójność aktualizacji
-
-Orchestrator używa dwóch etapów technicznych:
-
-1. **Prepare:** zapisuje zamiar operacji wraz z identyfikatorem i oczekiwanym stanem źródeł.
-2. **Confirm:** po sprawdzeniu rzeczywistego skutku zapisuje zdarzenie zakończenia.
-
-Przykładowo `l3_implementation_prepared` może zostać zatwierdzone dopiero, kiedy istnieje commit z rezultatem oraz zarejestrowany otwarty PR.
-
-Jeżeli proces zakończy się pomiędzy tymi etapami, kolejne uruchomienie sprawdza rzeczywiste artefakty i kończy rozpoczętą operację.
-
-Dzięki temu ponowienie nie powoduje automatycznie kolejnego kosztownego wywołania Claude Code.
-
-### 8.11. Konkurencyjne uruchomienia
-
-Dla jednego Jira issue może być aktywna najwyżej jedna operacja modyfikująca jego stan.
-
-Orchestrator zakłada blokadę na czas przetwarzania issue i kontroluje oczekiwany Git head SHA przed push.
-
-Przed operacją na PR odświeża jego bieżący stan.
-
-Jeżeli developer w międzyczasie wykonał merge, zamknął PR lub zmodyfikował branch, orchestrator ponownie ocenia operację zamiast wykonywać ją na nieaktualnych danych.
-
-### 8.12. Konflikty
-
-| Sytuacja                                                    | Działanie                                          |
-|-------------------------------------------------------------|----------------------------------------------------|
-| Nieaktualny informacyjny label                              | Automatyczne uzgodnienie                           |
-| Nieaktualny indeks                                          | Korekta przy regeneracji                           |
-| `golem:continue` i `golem:park` jednocześnie                | Wstrzymanie poleceń                                |
-| Dwa aktywne PR implementacyjne dla tej samej próby          | Wstrzymanie i decyzja developera                   |
-| PR zamknięty bez merge, poza procedurą parkowania           | Konflikt lifecycle                                 |
-| Jira `Done`, brak merge implementacyjnego PR                | Pominięcie i raport rozbieżności                   |
-| Developer przejął issue (`In Progress` albo aktywny branch) | Wstrzymanie modyfikacji AI                         |
-| Niedostępny GitHub podczas weryfikacji stanu PR             | Brak operacji zależnych od aktualnego stanu GitHub |
-| Uszkodzony lub niezgodny rekord Journal                     | Wstrzymanie issue i diagnostyka                    |
-
-Konflikt jest zdarzeniem diagnostycznym, nie wartością `golem_state`.
-
-Orchestrator zachowuje ostatni potwierdzony stan oraz rejestruje powód blokady.
-
-### 8.13. Wersjonowanie i projekcje
-
-Każdy rekord Journal ma `schema_version`.
-
-Nieznana wersja kontraktu jest błędem walidacji. Migracja danych odbywa się jawnie, bez zgadywania znaczenia pól.
-
-Raporty mogą przechowywać cache wyliczonego `golem_state`, wraz z czasem odświeżenia i referencją do ostatniego przetworzonego zdarzenia.
-
-**Cache nie jest źródłem prawdy dla operacji modyfikujących GitHub.**
+Wszystkie wykonane wywołania AI są uwzględniane w raportowaniu kosztów.
 
 ## 9. Parkowanie
 
 ### 9.1. Cel
 
-Parkowanie zachowuje wynik analizy bez integrowania niedokończonego kodu produkcyjnego.
+Parkowanie zachowuje wartościowe wyniki analizy, bez integrowania niedokończonego kodu produkcyjnego.
 
-Golem przygotowuje Memory Bank i zwykły dokumentacyjny PR do `develop`.
+Developer inicjuje parkowanie przez `golem:park` na istniejącym PR.
 
 ### 9.2. Archiwizacja kodu
 
-Jeżeli istnieje częściowa implementacja, Golem zapisuje jej commit i tworzy trwały Git tag.
+Jeżeli istnieje niedokończona implementacja, Golem zapisuje commit SHA i tworzy tag:
 
-Przykład:
+`golem/parked/PROJECT-1234-implement-anything-a1b2c3d4`
 
-`golem/parked/PROJECT-1234-implement-anything/attempt-2`
-
-Tag jest unikalny dla próby, nie jest nadpisywany przy późniejszym parkowaniu.
-
-Przed usunięciem brancha Golem potwierdza publikację taga i zgodność SHA.
-
-### 9.3. Frontmatter
+Przykład frontmatter:
 
 ```yaml
 ---
 jira: PROJECT-1234
 ai_status: parked
-golem_attempt: 2
 pull_request: https://github.com/example-org/example-repo/pull/1842
 
 parked_code:
-  tag: golem/parked/PROJECT-1234-implement-anything/attempt-2
+  tag: golem/parked/PROJECT-1234-implement-anything-a1b2c3d4
   commit: a1b2c3d4e5f678901234567890abcdef12345678
 ---
 ```
 
-Jeżeli nie powstał kod wymagający archiwizacji, `parked_code` jest pomijane.
+Starsze tagi mogą zostać usunięte, jeżeli wcześniejszy kod nie przedstawia już wartości.
 
-### 9.4. Documentation PR
+### 9.3. Documentation PR
 
 Golem:
 
-1. Tworzy branch `docs/<basename>` z aktualnego `develop`.
-2. Przenosi Memory Bank i niezbędne metadata.
+1. Tworzy `docs/PROJECT-1234-implement-anything` z aktualnego `develop`.
+2. Przenosi Memory Bank oraz niezbędne metadata.
 3. Otwiera zwykły dokumentacyjny PR.
-4. Zamyka oryginalny PR implementacyjny bez merge, po zabezpieczeniu kodu.
-5. Rejestruje powiązania PR w Journal.
+4. Po zabezpieczeniu kodu zamyka oryginalny PR implementacyjny bez merge i usuwa branch AI.
 
 **Dokumentacyjny PR nie otrzymuje labels Golema.**
 
-Developer wykonuje review i merge w zwykłym trybie.
+Developer wykonuje zwykłe review i merge.
 
-Dopiero potwierdzony merge tego PR ustanawia `golem_state: parked`.
+Potwierdzony merge dokumentacyjnego PR ustanawia `parked`.
 
-Jeżeli dokumentacyjny PR zostanie zamknięty bez merge, stan pozostaje `parking`, a orchestrator zgłasza konflikt wymagający rozstrzygnięcia.
+### 9.4. Odrzucenie dokumentacji
 
-### 9.5. Wznowienie
+Zamknięcie dokumentacyjnego PR bez merge oznacza odrzucenie tej pracy.
 
-Wznowienie wymaga jawnego polecenia operatora.
+Golem usuwa jej nieopublikowane artefakty i zbędne tagi, zachowując wcześniejszą dokumentację projektu.
 
-Golem odczytuje dokumentację, historię PR i ewentualny tag, przygotowuje branch z aktualnego `develop` oraz rozpoczyna nową próbę.
+Odrzucona praca nie trafia do `develop`.
 
-Wcześniejszy kod jest materiałem referencyjnym, nie automatycznie obowiązującym rozwiązaniem.
+### 9.5. Ponowne podjęcie issue
 
-## 10. Selekcja issues
+Zaparkowane issue jest wyłączone z automatycznej selekcji.
 
-Orchestrator wybiera kandydatów na podstawie lokalnych Jira metadata, historii Golema, Memory Banków i GitHub.
+Jeżeli developer zdecyduje o jego ponownym opracowaniu, Golem rozpoczyna standardowe przetwarzanie od L1.
 
-| Warunek                              | Zachowanie                               |
-|--------------------------------------|------------------------------------------|
-| Brak rozpoczętej pracy, Jira backlog | Kandydat do L1                           |
-| Jira `In Progress`                   | Pomiń                                    |
-| Jira `Done`                          | Pomiń                                    |
-| Aktywny branch developera            | Pomiń                                    |
-| Aktywna praca Golema                 | Kontynuuj zgodnie z etapem i poleceniami |
-| `parking`                            | Obsłuż trwającą procedurę                |
-| `parked`                             | Pomiń, chyba że jawne resume             |
-| `merged`                             | Pomiń                                    |
-| Konflikt danych stanu                | Wstrzymaj issue                          |
+Analiza wykorzystuje aktualne Jira Metadata i aktualny kod. Istniejący Memory Bank, historyczne PR-y i tagi są materiałami referencyjnymi.
 
-Memory Bank z `ai_status: parked` stanowi dodatkowy sygnał, że issue nie powinno być wybierane jako nowy task. Orchestrator uzgadnia go z historią parkowania i aktualną próbą.
+## 10. Candidate Selection
 
-## 11. Historia wykonania i koszty
+Golem korzysta z lokalnego snapshotu Jira Metadata.
 
-Dla każdego wywołania AI rejestrujemy:
+Warunek kwalifikacji:
 
-- Jira key i attempt.
-- Etap oraz identyfikator wywołania.
-- Model.
-- Czas rozpoczęcia i zakończenia.
-- Tokens i koszt.
-- Wynik lub błąd.
-- Commit i PR.
-- Powiązany event.
+```text
+metadata exists
+AND jira.status == NotStarted
+AND (memory_bank does not exist OR ai_status != parked)
+AND no developer branch
+AND no ai/ branch
+AND no docs/ branch
+```
 
-Dla operacji orkiestratora rejestrujemy również przyjęcie polecenia, przygotowanie i publikację PR, archiwizację kodu, resume i konflikty.
+Branche są sprawdzane według wspólnego basename, np.:
 
-Historia jest niezależna od Memory Banku i pozwala odtworzyć przebieg po przerwaniu procesu.
+- `PROJECT-1234-implement-anything`
+- `ai/PROJECT-1234-implement-anything`
+- `docs/PROJECT-1234-implement-anything`
 
-## 12. Uruchamianie
+Istniejący Memory Bank może zawierać wcześniejsze ustalenia developera i jest wykorzystywany jako kontekst.
 
-Proces Golema jest uruchamiany manualnie.
+Podczas uruchomienia Golem może zarówno rozpocząć kwalifikujące się issues, jak i obsłużyć polecenia na istniejących PR-ach.
 
-Operator może:
+## 11. Uruchamianie i raportowanie
 
-- Przetworzyć wybrane issues z backlogu.
-- Obsłużyć polecenia GitHub PR.
-- Kontynuować rozpoczęte zadanie.
-- Wznowić parked issue.
-- Wygenerować raport.
-- Ponownie uzgodnić stan po rozwiązaniu konfliktu.
+Golem jest uruchamiany manualnie.
 
-Developerzy komunikują się z Golemem przede wszystkim przez GitHub PR.
+Operator może wskazać zakres issues do opracowania, przetworzyć aktualne GitHub PR labels albo wygenerować raport.
 
-## 13. Release
+Raport obejmuje:
 
-Obowiązuje miesięczny release z odtworzeniem `develop` z `main`.
+- Liczbę issues poddanych L1, L2 i L3.
+- Liczbę przygotowanych implementacji.
+- Liczbę zmergowanych implementacji.
+- Liczbę zaparkowanych issues.
+- Koszty AI według etapów i modeli.
+- Błędy wykonania.
+- Nakład pracy developerskiej wymagany do review.
 
-Zamknięcie PR w wyniku procedury release nie oznacza `merged` ani `parked`.
+Proponowany PoC:
 
-Orchestrator zachowuje referencje do PR oraz ostatni potwierdzony wynik pracy. Dalsza obsługa jest zgodna z procedurą release.
+| Faza | Zakres |
+|---|---|
+| A | Orchestrator, Candidate Selection, L1, Journal |
+| B | L2, GitHub PR, labels i feedback |
+| C | L3, CI, review i merge |
+| D | Parkowanie i archiwizacja kodu |
 
-## 14. PoC i kryteria oceny
+## 12. Podsumowanie
 
-| Faza | Zakres                                       |
-|------|----------------------------------------------|
-| A    | Orchestrator, selekcja, L1, Journal i koszty |
-| B    | L2, GitHub PR, labels i feedback             |
-| C    | L3, CI, review i merge                       |
-| D    | Parkowanie, archiwizacja oraz wznowienie     |
+Project Golem wykorzystuje istniejące Jira Metadata, Memory Bank, indeksy tematyczne, GitHub i CI.
 
-Raport powinien pokazywać liczbę przeanalizowanych, zaimplementowanych, zmergowanych i zaparkowanych issues, koszt AI oraz nakład pracy developerskiej.
+Trzy odrębne etapy AI — L1, L2 i L3 — są sterowane przez skryptowy orchestrator. Gdy kontekst pozwala, cały proces od klasyfikacji do przygotowania PR może zostać wykonany w jednym uruchomieniu.
 
-Osobno raportuje błędy techniczne i konflikty stanu.
+- **`golem_state`** opisuje bieżący stan zadania.
+- **`ai_status`** przechowuje checkpoint pracy w Memory Banku.
+- **GitHub labels** służą do komunikacji i sterowania przez developera.
+- **GitHub** potwierdza rzeczywisty merge.
+- **Event Journal** rejestruje wykonanie i koszty.
+- **Developer** zachowuje pełny code ownership.
 
-## 15. Podsumowanie
+Praca kończy się przyjęciem implementacji (`merged`), opublikowaniem dokumentacji parkowania (`parked`) albo odrzuceniem dokumentacyjnego PR.
 
-Project Golem wykorzystuje istniejącą infrastrukturę Jira, GitHub, CI, Memory Bank i indeksy tematyczne.
-
-Stan zadania ma jeden kanoniczny model:
-
-- **`golem_state`** — stan wyliczony.
-- **`ai_status`** — ostatni potwierdzony wynik pracy AI w Memory Banku.
-- **Event Journal** — trwała historia zdarzeń i prób realizacji.
-- **GitHub** — źródło prawdy o PR i merge.
-- **Jira Metadata** — status biznesowy issue.
-
-Numer `attempt` pozwala rozróżnić historyczne parkowanie od późniejszej pracy bez wprowadzania kolejnych statusów.
-
-Orchestrator zapewnia idempotencję, trwałość wyników oraz kontrolę konfliktów. Człowiek zachowuje pełną odpowiedzialność za merge i code ownership.
-
-**Miarą sukcesu pozostaje liczba rzeczywiście zrealizowanych, długo zalegających Jira issues.**
+**Miarą sukcesu jest liczba rzeczywiście rozwiązanych, długo zalegających Jira issues.**
