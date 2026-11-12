@@ -7,6 +7,11 @@
 ## 1. Cel projektu
 
 Project Golem ma pomagać w realizacji zadań Jira, które przez wiele miesięcy pozostają w backlogu.
+- podstawowym założeniem jest:
+  - minimalizacja wysiłku i zaangażowania zespołu deweloperów przy przetwarzaniu zadań z backlogu
+- wartościowym efektem jest: 
+  - kod implementujący zaległe zadanie z Jiry
+  - dostarczenie analizy dla zaległych zadań z Jiry, co ułatwi dalsze realizacje
 
 Zadania te często powstają przy okazji bieżącego developmentu. Ich opisy bywają skrótowe, bez formalnych acceptance criteria, i zakładają znajomość istniejącego systemu.
 
