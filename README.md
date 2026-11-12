@@ -51,14 +51,14 @@ flowchart TD
     SELECT -->|Eligible| L1["L1 — Classification"]
     SELECT -->|Excluded| SKIP["Skip"]
 
-    L1 -->|l1_completed| TRIAGED["triaged"]
+    L1 -->|l1-completed| TRIAGED["triaged"]
     TRIAGED --> L2["L2 — Analysis"]
 
     L2 --> L2R{"L2 result"}
-    L2R -->|l2_completed| READY["ready_for_l3"]
-    L2R -->|l2_clarification_required| Q2["needs_clarification_l2"]
+    L2R -->|l2-completed| READY["ready-for-l3"]
+    L2R -->|l2-clarification-required| Q2["needs-clarification-l2"]
 
-    Q2 --> PR2["PR: golem:clarification_needed"]
+    Q2 --> PR2["PR: golem:clarification-needed"]
     PR2 --> FEEDBACK2["Developer feedback"]
     FEEDBACK2 --> CMD2{"Developer command"}
     CMD2 -->|golem:continue| TRIAGED
@@ -66,16 +66,16 @@ flowchart TD
     READY --> L3["L3 — Implementation"]
     L3 --> L3R{"L3 result"}
 
-    L3R -->|l3_clarification_required| Q3["needs_clarification_l3"]
-    L3R -->|l3_reanalysis_required| TRIAGED
-    L3R -->|l3_implementation_prepared| REVIEW["in_review"]
+    L3R -->|l3-clarification-required| Q3["needs-clarification-l3"]
+    L3R -->|l3-reanalysis-required| TRIAGED
+    L3R -->|l3-implementation-prepared| REVIEW["in-review"]
 
-    Q3 --> PR3["PR: golem:clarification_needed"]
+    Q3 --> PR3["PR: golem:clarification-needed"]
     PR3 --> FEEDBACK3["Developer feedback"]
     FEEDBACK3 --> CMD3{"Developer command"}
     CMD3 -->|golem:continue| READY
 
-    REVIEW --> CI["CI / PR: golem:ready_for_review"]
+    REVIEW --> CI["CI / PR: golem:ready-for-review"]
     CI --> DECISION{"Developer decision"}
 
     DECISION -->|Merge implementation PR| MERGED["merged"]
@@ -106,8 +106,8 @@ Diagram pokazuje przejścia wynikające z pracy AI oraz poleceń developera.
 W szczególności:
 
 - `golem:continue` po pytaniu L2 wraca do `triaged`, skąd ponownie wykonywane jest L2.
-- `golem:continue` po pytaniu L3 wraca do `ready_for_l3`, skąd ponownie wykonywane jest L3.
-- `golem:continue` po code review również kieruje pracę do `ready_for_l3`.
+- `golem:continue` po pytaniu L3 wraca do `ready-for-l3`, skąd ponownie wykonywane jest L3.
+- `golem:continue` po code review również kieruje pracę do `ready-for-l3`.
 - L3 może wykryć konieczność ponownej analizy rozwiązania i skierować zadanie do L2.
 - `golem:park` jest poleceniem developera dostępnym przy otwartym PR wymagającym jego reakcji.
 
@@ -187,9 +187,9 @@ Finalny dokument opisuje rzeczywisty rezultat pracy. Może odwoływać się do w
 
 `labels` pochodzą z Jira.
 
-`ai_labels` są przypisywane przez L1 i przechowywane w Memory Banku.
+`ai-labels` są przypisywane przez L1 i przechowywane w Memory Banku.
 
-`effective_labels = labels ∪ ai_labels`
+`effective-labels = labels ∪ ai-labels`
 
 Istniejące indeksy YAML znajdują się w `metadata/indexes/`. Obejmują `develop` i aktywne branche oraz zachowują dotychczasowy model fuzzy consistency.
 
@@ -201,19 +201,19 @@ Każde wywołanie AI zwraca jednoznaczny rezultat, który orchestrator interpret
 
 | Etap | Zdarzenie | Znaczenie |
 |---|---|---|
-| L1 | `l1_completed` | Klasyfikacja zakończona |
-| L1 | `l1_failed` | Niepowodzenie |
-| L2 | `l2_completed` | Rozwiązanie gotowe do implementacji |
-| L2 | `l2_clarification_required` | Potrzebna decyzja developera |
-| L2 | `l2_failed` | Niepowodzenie |
-| L3 | `l3_implementation_prepared` | Implementacja przygotowana do review |
-| L3 | `l3_clarification_required` | Potrzebna decyzja developera |
-| L3 | `l3_reanalysis_required` | Konieczna ponowna analiza L2 |
-| L3 | `l3_failed` | Niepowodzenie |
+| L1 | `l1-completed` | Klasyfikacja zakończona |
+| L1 | `l1-failed` | Niepowodzenie |
+| L2 | `l2-completed` | Rozwiązanie gotowe do implementacji |
+| L2 | `l2-clarification-required` | Potrzebna decyzja developera |
+| L2 | `l2-failed` | Niepowodzenie |
+| L3 | `l3-implementation-prepared` | Implementacja przygotowana do review |
+| L3 | `l3-clarification-required` | Potrzebna decyzja developera |
+| L3 | `l3-reanalysis-required` | Konieczna ponowna analiza L2 |
+| L3 | `l3-failed` | Niepowodzenie |
 
 ### 5.1. L1 — Classification
 
-L1 identyfikuje temat zadania, przypisuje `ai_labels`, znajduje powiązane issues i potencjalne duplikaty.
+L1 identyfikuje temat zadania, przypisuje `ai-labels`, znajduje powiązane issues i potencjalne duplikaty.
 
 Po zakończeniu L1 zadanie przechodzi do `triaged`.
 
@@ -225,11 +225,11 @@ L2 analizuje wymagania w kontekście aktualnego kodu, testów, dokumentacji i po
 
 Przygotowuje rozwiązanie nadające się do implementacji albo pytania wymagające decyzji developera.
 
-Po `l2_completed` zadanie przechodzi do `ready_for_l3`.
+Po `l2-completed` zadanie przechodzi do `ready-for-l3`.
 
-Po `l2_clarification_required` przechodzi do `needs_clarification_l2`, a Golem publikuje pytania w PR.
+Po `l2-clarification-required` przechodzi do `needs-clarification-l2`, a Golem publikuje pytania w PR.
 
-Gdy developer odpowie i ustawi `golem:continue`, praca wraca do `triaged` i L2 jest uruchamiane ponownie. Jeśli odpowiedź nadal jest niewystarczająca, L2 ponownie zwraca `l2_clarification_required`.
+Gdy developer odpowie i ustawi `golem:continue`, praca wraca do `triaged` i L2 jest uruchamiane ponownie. Jeśli odpowiedź nadal jest niewystarczająca, L2 ponownie zwraca `l2-clarification-required`.
 
 ### 5.3. L3 — Implementation
 
@@ -237,14 +237,14 @@ L3 implementuje Proposed Solution, dodaje testy, wykonuje lokalną weryfikację 
 
 Możliwe wyniki:
 
-- `l3_implementation_prepared` — kod gotowy do review.
-- `l3_clarification_required` — potrzebna decyzja developera.
-- `l3_reanalysis_required` — należy ponownie uruchomić L2, ponieważ aktualne rozwiązanie wymaga weryfikacji lub zmiany.
-- `l3_failed` — wywołanie zakończone niepowodzeniem.
+- `l3-implementation-prepared` — kod gotowy do review.
+- `l3-clarification-required` — potrzebna decyzja developera.
+- `l3-reanalysis-required` — należy ponownie uruchomić L2, ponieważ aktualne rozwiązanie wymaga weryfikacji lub zmiany.
+- `l3-failed` — wywołanie zakończone niepowodzeniem.
 
-Po `l3_clarification_required` developer odpowiada przez PR. `golem:continue` kieruje zadanie do `ready_for_l3`, po czym L3 ponownie ocenia odpowiedź i kontynuuje pracę.
+Po `l3-clarification-required` developer odpowiada przez PR. `golem:continue` kieruje zadanie do `ready-for-l3`, po czym L3 ponownie ocenia odpowiedź i kontynuuje pracę.
 
-Po `l3_reanalysis_required` zadanie wraca do `triaged` i wykonywane jest L2. Wynikiem L2 może być zarówno `l2_completed`, jak i `l2_clarification_required`.
+Po `l3-reanalysis-required` zadanie wraca do `triaged` i wykonywane jest L2. Wynikiem L2 może być zarówno `l2-completed`, jak i `l2-clarification-required`.
 
 To samo dotyczy ponownej analizy koniecznej po uwagach z code review.
 
@@ -258,7 +258,7 @@ Jeżeli:
 2. L2 ustali rozwiązanie bez pytań blokujących,
 3. L3 przygotuje implementację i testy,
 
-orchestrator wykonuje kolejno wszystkie trzy etapy, aktualizuje Memory Bank, tworzy lub aktualizuje PR i ustawia `golem:ready_for_review`.
+orchestrator wykonuje kolejno wszystkie trzy etapy, aktualizuje Memory Bank, tworzy lub aktualizuje PR i ustawia `golem:ready-for-review`.
 
 Developer otrzymuje wtedy gotową propozycję implementacji do review, bez konieczności odpowiadania na pytania podczas analizy.
 
@@ -270,8 +270,8 @@ Interakcja z developerem jest potrzebna dopiero wtedy, gdy AI zidentyfikuje brak
 
 | Label | Ustawia | Znaczenie |
 |---|---|---|
-| `golem:clarification_needed` | Golem | Oczekiwanie na informację lub decyzję |
-| `golem:ready_for_review` | Golem | Implementacja przygotowana do review |
+| `golem:clarification-needed` | Golem | Oczekiwanie na informację lub decyzję |
+| `golem:ready-for-review` | Golem | Implementacja przygotowana do review |
 | `golem:continue` | Developer | Uwzględnij feedback i kontynuuj |
 | `golem:park` | Developer | Przygotuj parkowanie |
 
@@ -287,15 +287,15 @@ Następny etap zależy od stanu:
 
 | Stan | `golem:continue` |
 |---|---|
-| `needs_clarification_l2` | Powrót do `triaged`, ponowne L2 |
-| `needs_clarification_l3` | Powrót do `ready_for_l3`, ponowne L3 |
-| `in_review` | Powrót do `ready_for_l3`, ponowne L3 |
+| `needs-clarification-l2` | Powrót do `triaged`, ponowne L2 |
+| `needs-clarification-l3` | Powrót do `ready-for-l3`, ponowne L3 |
+| `in-review` | Powrót do `ready-for-l3`, ponowne L3 |
 
-L3 może podczas ponownej pracy zgłosić `l3_reanalysis_required`, co kieruje zadanie do L2.
+L3 może podczas ponownej pracy zgłosić `l3-reanalysis-required`, co kieruje zadanie do L2.
 
 ### 6.3. Code review
 
-Po L3 Golem ustawia `golem:ready_for_review`.
+Po L3 Golem ustawia `golem:ready-for-review`.
 
 Developer może wykonać merge, zgłosić komentarze lub Request changes, samodzielnie poprawić kod, ustawić `golem:continue` albo `golem:park`.
 
@@ -305,9 +305,9 @@ Feedback z code review jest przekazywany do kolejnego wywołania L3.
 
 `golem:park` może zostać ustawione na PR w stanie:
 
-- `needs_clarification_l2`
-- `needs_clarification_l3`
-- `in_review`
+- `needs-clarification-l2`
+- `needs-clarification-l3`
+- `in-review`
 
 Przyjęcie tego polecenia rozpoczyna procedurę `parking`.
 
@@ -317,26 +317,26 @@ Orchestrator odczytuje polecenia GitHub podczas uruchomienia Golema.
 
 Dla `golem:continue` albo `golem:park` wykonuje odpowiednią operację i usuwa obsłużony label.
 
-**Propozycja implementacyjna:** w Journalu można przechowywać `source_event_id` identyfikujący dodanie labela, aby rozróżniać kolejne polecenia od ponownego odczytania tego samego zdarzenia.
+**Propozycja implementacyjna:** w Journalu można przechowywać `source-event-id` identyfikujący dodanie labela, aby rozróżniać kolejne polecenia od ponownego odczytania tego samego zdarzenia.
 
 ## 7. Canonical Task State
 
 ### 7.1. Definicja
 
-`golem_state` jest kanonicznym stanem zadania, ustalanym przez orchestrator na podstawie Memory Banku i rzeczywistych danych GitHub.
+`golem-state` jest kanonicznym stanem zadania, ustalanym przez orchestrator na podstawie Memory Banku i rzeczywistych danych GitHub.
 
-`ai_status` we frontmatter przechowuje checkpoint pracy AI. GitHub potwierdza stan PR i faktyczny merge.
+`ai-status` we frontmatter przechowuje checkpoint pracy AI. GitHub potwierdza stan PR i faktyczny merge.
 
 ### 7.2. Stany
 
-| `golem_state` | Znaczenie |
+| `golem-state` | Znaczenie |
 |---|---|
-| `not_started` | Brak rozpoczętej pracy Golema |
+| `not-started` | Brak rozpoczętej pracy Golema |
 | `triaged` | L1 zakończone; można wykonać L2 |
-| `needs_clarification_l2` | L2 oczekuje na odpowiedź developera |
-| `ready_for_l3` | L2 zakończone; można wykonać L3 |
-| `needs_clarification_l3` | L3 oczekuje na odpowiedź developera |
-| `in_review` | Implementacja oczekuje na review |
+| `needs-clarification-l2` | L2 oczekuje na odpowiedź developera |
+| `ready-for-l3` | L2 zakończone; można wykonać L3 |
+| `needs-clarification-l3` | L3 oczekuje na odpowiedź developera |
+| `in-review` | Implementacja oczekuje na review |
 | `parking` | Trwa przygotowanie i review dokumentacji parkowania |
 | `parked` | Dokumentacyjny PR zmergowany |
 | `merged` | Implementacyjny PR zmergowany do `develop` |
@@ -347,61 +347,61 @@ Dla `golem:continue` albo `golem:park` wykonuje odpowiednią operację i usuwa o
 
 | Stan początkowy | Zdarzenie lub polecenie | Stan wynikowy |
 |---|---|---|
-| `not_started` | `l1_completed` | `triaged` |
-| `triaged` | `l2_completed` | `ready_for_l3` |
-| `triaged` | `l2_clarification_required` | `needs_clarification_l2` |
-| `needs_clarification_l2` | `golem:continue` | `triaged` |
-| `ready_for_l3` | `l3_implementation_prepared` i PR | `in_review` |
-| `ready_for_l3` | `l3_clarification_required` | `needs_clarification_l3` |
-| `ready_for_l3` | `l3_reanalysis_required` | `triaged` |
-| `needs_clarification_l3` | `golem:continue` | `ready_for_l3` |
-| `in_review` | `golem:continue` | `ready_for_l3` |
-| `in_review` | Merge implementacyjnego PR | `merged` |
-| `needs_clarification_l2` | `golem:park` | `parking` |
-| `needs_clarification_l3` | `golem:park` | `parking` |
-| `in_review` | `golem:park` | `parking` |
+| `not-started` | `l1-completed` | `triaged` |
+| `triaged` | `l2-completed` | `ready-for-l3` |
+| `triaged` | `l2-clarification-required` | `needs-clarification-l2` |
+| `needs-clarification-l2` | `golem:continue` | `triaged` |
+| `ready-for-l3` | `l3-implementation-prepared` i PR | `in-review` |
+| `ready-for-l3` | `l3-clarification-required` | `needs-clarification-l3` |
+| `ready-for-l3` | `l3-reanalysis-required` | `triaged` |
+| `needs-clarification-l3` | `golem:continue` | `ready-for-l3` |
+| `in-review` | `golem:continue` | `ready-for-l3` |
+| `in-review` | Merge implementacyjnego PR | `merged` |
+| `needs-clarification-l2` | `golem:park` | `parking` |
+| `needs-clarification-l3` | `golem:park` | `parking` |
+| `in-review` | `golem:park` | `parking` |
 | `parking` | Merge dokumentacyjnego PR | `parked` |
 | `parking` | Odrzucenie dokumentacyjnego PR | Zakończenie pracy i usunięcie odrzuconych artefaktów |
 
 Powrót L3 do L2 jest dwustopniowy:
 
-`ready_for_l3 → triaged → L2`
+`ready-for-l3 → triaged → L2`
 
 Następnie L2 może zwrócić:
 
-- `l2_completed` → `ready_for_l3`
-- `l2_clarification_required` → `needs_clarification_l2`
+- `l2-completed` → `ready-for-l3`
+- `l2-clarification-required` → `needs-clarification-l2`
 
 Dotyczy to również sytuacji, gdy potrzeba ponownej analizy została wykryta podczas poprawiania kodu po review.
 
 Pełny przepływ jest przedstawiony w diagramie 2.2.
 
-### 7.4. `ai_status`
+### 7.4. `ai-status`
 
-| `ai_status` | Znaczenie |
+| `ai-status` | Znaczenie |
 |---|---|
 | `triaged` | L1 zakończone albo powrót do L2 |
-| `needs_clarification_l2` | L2 oczekuje na decyzję |
-| `ready_for_l3` | L2 zakończone albo powrót do L3 |
-| `needs_clarification_l3` | L3 oczekuje na decyzję |
+| `needs-clarification-l2` | L2 oczekuje na decyzję |
+| `ready-for-l3` | L2 zakończone albo powrót do L3 |
+| `needs-clarification-l3` | L3 oczekuje na decyzję |
 | `implemented` | L3 przygotowało implementację |
 | `parked` | Przygotowano dokumentację parkowania |
 
-Orchestrator aktualizuje checkpoint przy wykonywaniu przejść. Przy `golem:continue` wraca do odpowiedniego punktu wejścia (`triaged` lub `ready_for_l3`), a następny wynik agenta ustala kolejny stan.
+Orchestrator aktualizuje checkpoint przy wykonywaniu przejść. Przy `golem:continue` wraca do odpowiedniego punktu wejścia (`triaged` lub `ready-for-l3`), a następny wynik agenta ustala kolejny stan.
 
 Przykład:
 
 ```yaml
 ---
 jira: PROJECT-1234
-ai_status: implemented
-pull_request: https://github.com/example-org/example-repo/pull/1842
+ai-status: implemented
+pull-request: https://github.com/example-org/example-repo/pull/1842
 ---
 ```
 
-Dla otwartego PR kanoniczny stan wynosi `in_review`.
+Dla otwartego PR kanoniczny stan wynosi `in-review`.
 
-Po merge implementacyjnego PR wynosi `merged`, podczas gdy Memory Bank zachowuje `ai_status: implemented`.
+Po merge implementacyjnego PR wynosi `merged`, podczas gdy Memory Bank zachowuje `ai-status: implemented`.
 
 ## 8. Event Journal
 
@@ -426,28 +426,28 @@ Wybór należy do implementacji.
 ### 8.3. Przykładowy rekord
 
 ```yaml
-issue_key: PROJECT-1234
+issue-key: PROJECT-1234
 phase: L2
 model: claude-sonnet
-started_at: "2026-11-12T00:40:00Z"
-finished_at: "2026-11-12T00:45:00Z"
-result: l2_completed
+started-at: "2026-11-12T00:40:00Z"
+finished-at: "2026-11-12T00:45:00Z"
+result: l2-completed
 
 cost:
-  input_tokens: 12000
-  output_tokens: 3500
+  input-tokens: 12000
+  output-tokens: 3500
   usd: 0.09
 
 git:
   branch: ai/PROJECT-1234-implement-anything
   commit: a1b2c3d4e5f678901234567890abcdef12345678
 
-pull_request: https://github.com/example-org/example-repo/pull/1842
+pull-request: https://github.com/example-org/example-repo/pull/1842
 ```
 
 Dokładna reprezentacja kosztów zależy od danych udostępnianych przez Claude Code.
 
-Opcjonalne `source_event_id` może służyć identyfikacji zdarzeń GitHub wywołujących polecenia Golema.
+Opcjonalne `source-event-id` może służyć identyfikacji zdarzeń GitHub wywołujących polecenia Golema.
 
 ### 8.4. Niepowodzenia
 
@@ -476,10 +476,10 @@ Przykład frontmatter:
 ```yaml
 ---
 jira: PROJECT-1234
-ai_status: parked
-pull_request: https://github.com/example-org/example-repo/pull/1842
+ai-status: parked
+pull-request: https://github.com/example-org/example-repo/pull/1842
 
-parked_code:
+parked-code:
   tag: golem/parked/PROJECT-1234-implement-anything-a1b2c3d4
   commit: a1b2c3d4e5f678901234567890abcdef12345678
 ---
@@ -527,7 +527,7 @@ Warunek kwalifikacji:
 ```text
 metadata exists
 AND jira.status == NotStarted
-AND (memory_bank does not exist OR ai_status != parked)
+AND (memory-bank does not exist OR ai-status != parked)
 AND no developer branch
 AND no ai/ branch
 AND no docs/ branch
@@ -574,8 +574,8 @@ Project Golem wykorzystuje istniejące Jira Metadata, Memory Bank, indeksy temat
 
 Trzy odrębne etapy AI — L1, L2 i L3 — są sterowane przez skryptowy orchestrator. Gdy kontekst pozwala, cały proces od klasyfikacji do przygotowania PR może zostać wykonany w jednym uruchomieniu.
 
-- **`golem_state`** opisuje bieżący stan zadania.
-- **`ai_status`** przechowuje checkpoint pracy w Memory Banku.
+- **`golem-state`** opisuje bieżący stan zadania.
+- **`ai-status`** przechowuje checkpoint pracy w Memory Banku.
 - **GitHub labels** służą do komunikacji i sterowania przez developera.
 - **GitHub** potwierdza rzeczywisty merge.
 - **Event Journal** rejestruje wykonanie i koszty.
