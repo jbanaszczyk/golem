@@ -193,7 +193,7 @@ Orchestrator odpowiada za:
 6. Odczyt wyników i aktualizację Memory Banku.
 7. Operacje Git oraz GitHub PR.
 8. Obsługę poleceń przekazanych przez PR labels.
-9. Wyznaczanie kanonicznego stanu zadania.
+9. Wyznaczanie kanonicznego stanu zadania i sprawdzanie jego spójności.
 10. Rejestrowanie wykonanych operacji i kosztów.
 
 ### 4.3. Role AI
@@ -487,52 +487,125 @@ stateDiagram-v2
     merged --> [*]
 ```
 
-### 7.6. Wyznaczanie stanu
+### 7.6. Rozstrzyganie stanu
 
-Orchestrator stosuje następującą kolejność rozstrzygania:
+Orchestrator wyznacza `golem_state` na podstawie potwierdzonych zdarzeń dotyczących **bieżącego cyklu pracy nad issue**.
 
-1. **`merged`** — jeśli GitHub potwierdza merge implementacyjnego PR.
-2. **`parked`** — jeśli dokumentacyjny PR został zmergowany i opublikowano Memory Bank odłożonego zadania.
-3. **`parking`** — jeśli trwa rozpoczęta procedura parkowania.
-4. **`in_review`** — jeśli implementacja została przygotowana i istnieje otwarty PR do review.
-5. **`clarification_needed`** — jeśli ostatni potwierdzony wynik L2 lub L3 wymaga decyzji.
-6. **`ready_for_l3`** — jeśli ostatni potwierdzony wynik L2 dopuszcza implementację.
-7. **`triaged`** — jeśli zakończono L1.
-8. **`not_started`** — jeśli nie ma potwierdzonej pracy Golema.
+Pierwsze rozpoczęcie pracy tworzy cykl. Jawne wznowienie z `parked` rozpoczyna kolejny. Historia poprzednich cykli, w tym ich PR-y i dokumentacyjne merge, pozostaje dostępna, ale nie przesłania wyników bieżącej pracy.
 
-Rozpoczęcie parkowania jest rejestrowane przez orchestrator. Dzięki temu stan `parking` pozostaje rozpoznawalny również po usunięciu polecenia `golem:park` z oryginalnego PR.
+Dla bieżącego cyklu obowiązują następujące reguły:
 
-### 7.7. Memory Bank i status końcowy
+1. **`merged`** — GitHub potwierdza merge implementacyjnego PR.
+2. **`parked`** — GitHub potwierdza merge dokumentacyjnego PR parkowania.
+3. **`parking`** — orchestrator zarejestrował rozpoczęcie procedury parkowania, która nie została zakończona.
+4. **`clarification_needed`** — ostatni potwierdzony wynik L2/L3 wymaga decyzji.
+5. **`in_review`** — ostatni potwierdzony wynik L3 to `implemented` i odpowiadający mu PR jest otwarty.
+6. **`ready_for_l3`** — ostatni potwierdzony wynik L2 dopuszcza implementację.
+7. **`triaged`** — zakończono L1.
+8. **`not_started`** — brak potwierdzonej pracy Golema.
 
-Memory Bank przechowuje wynik pracy AI, np.:
+Rozstrzyganie opiera się na identyfikacji konkretnego PR i jego roli, a nie wyłącznie na Jira key występującym w nazwie brancha.
 
-```yaml
----
-jira: PROJECT-1234
-ai_status: implemented
----
-```
+Nie stosujemy zasady „najnowsza data wygrywa” do niepowiązanych źródeł. Kolejność zdarzeń ustalana jest w ramach zarejestrowanego cyklu pracy.
 
-Dla otwartego PR implementacyjnego kanoniczny `golem_state` wynosi `in_review`.
+### 7.7. Kategorie niespójności
 
-Po rzeczywistym merge tego PR wynosi `merged`.
+Rozróżniamy dwa przypadki:
 
-W obu przypadkach `ai_status: implemented` pozostaje prawdziwym opisem pracy wykonanej przez Golema.
+**Nieaktualne dane pochodne** — można je poprawić deterministycznie, bez zmiany rzeczywistego stanu zadania.
 
-Dla parkowania:
+**Konflikt stanu** — istnieją sprzeczne zdarzenia lub warunki, których orchestrator nie może bezpiecznie zinterpretować. Dalsze działania dotyczące issue są wtedy wstrzymywane do wyjaśnienia.
 
-```yaml
----
-jira: PROJECT-1234
-ai_status: parked
----
-```
+| Sytuacja | Klasyfikacja | Działanie |
+|---|---|---|
+| PR jest już merged, ale ma historyczny label Golema | Nieaktualna informacja | Stan wynika z merge; label nie uruchamia działania |
+| Memory Bank ma `implemented`, a PR oczekuje na review | Spójne dane | `in_review` |
+| Memory Bank ma `parked`, a dokumentacyjny PR pozostaje otwarty | Spójne dane | `parking` |
+| PR ma `golem:ready_for_review`, ale najnowszy wynik L2/L3 wymaga wyjaśnień | Nieaktualny label informacyjny | Dostosowanie labela do potwierdzonego wyniku |
+| PR ma jednocześnie `golem:continue` i `golem:park` | Konflikt poleceń | Wstrzymanie, developer wybiera jedno |
+| Istnieją dwa aktywne PR implementacyjne dla tego samego issue i cyklu | Konflikt identyfikacji | Wstrzymanie i wskazanie PR do kontynuacji |
+| Oryginalny PR zamknięto bez merge, a brak procedury parkowania | Konflikt lifecycle | Wstrzymanie i wyjaśnienie dalszego losu zadania |
+| Jira `Done`, ale brak potwierdzonego merge implementacji przez Golema | Rozbieżność źródeł | Nie deklarować `merged`; wyłączyć z selekcji i zgłosić rozbieżność |
+| Jira `In Progress` lub aktywny branch developera pojawia się podczas pracy AI | Konflikt ownership | Wstrzymanie kolejnych modyfikacji AI do decyzji developera |
+| Indeks wskazuje usunięty branch | Nieaktualny indeks | Korekta przy regeneracji indeksów |
 
-Przed merge dokumentacyjnego PR kanoniczny stan wynosi `parking`. Po merge — `parked`.
+Niezgodność wynikająca wyłącznie z opóźnionej regeneracji indeksów nie blokuje pracy nad issue.
 
-Pozwala to publikować finalny Memory Bank bez dodatkowego commitu aktualizującego status po merge.
+### 7.8. Konflikty poleceń GitHub
 
-### 7.8. Niepowodzenia i przerwane wykonania
+`golem:continue` i `golem:park` są poleceniami sterującymi.
+
+Dla jednego PR jednocześnie może być aktywne najwyżej jedno nierozpatrzone polecenie.
+
+Jeżeli oba labels występują równocześnie:
+
+1. Orchestrator nie wykonuje żadnego z poleceń.
+2. Raportuje konflikt wraz z URL-em PR.
+3. Developer usuwa nieaktualny label.
+4. Kolejne uruchomienie przetwarza pozostałe polecenie.
+
+Labels `golem:clarification_needed` oraz `golem:ready_for_review` opisują wynik pracy AI. Ich aktualność można sprawdzić na podstawie ostatniego potwierdzonego wyniku L2/L3.
+
+W przypadku niespójności orchestrator może skorygować labels informacyjne. Nie usuwa przy tym nierozpatrzonych poleceń developerskich.
+
+### 7.9. Konflikty między GitHub a Memory Bankiem
+
+**GitHub jest źródłem prawdy o rzeczywistym merge. Memory Bank jest źródłem prawdy o wyniku analizy AI.**
+
+Przykłady:
+
+- `ai_status: implemented` i otwarty PR — `golem_state: in_review`.
+- `ai_status: implemented` i potwierdzony merge PR — `golem_state: merged`.
+- `ai_status: parked` i otwarty dokumentacyjny PR — `golem_state: parking`.
+- `ai_status: parked` i zmergowany dokumentacyjny PR — `golem_state: parked`.
+
+Potwierdzonego merge nie można unieważnić przez zmianę labela lub starszy wynik agenta.
+
+Jeśli PR zamknięto bez merge, orchestrator sprawdza, czy zamknięcie należy do zarejestrowanej procedury parkowania. W przeciwnym przypadku zgłasza konflikt lifecycle.
+
+### 7.10. Konflikty po wznowieniu
+
+Wznowienie `parked` jest jawnie rejestrowaną operacją rozpoczynającą nowy cykl pracy.
+
+Poprzedni dokumentacyjny PR, jego merge oraz zarchiwizowany kod stanowią historię zadania.
+
+Do wyznaczania bieżącego `golem_state` wykorzystuje się wyniki nowego cyklu.
+
+Do czasu uzyskania pierwszego potwierdzonego wyniku ponownej analizy zachowywany jest ostatni potwierdzony stan `parked`. Trwające wznowienie jest widoczne w historii wykonania i nie powoduje samodzielnego zakwalifikowania issue do przetwarzania backlogu.
+
+Jeżeli próba wznowienia nie powiedzie się, zadanie pozostaje `parked`.
+
+### 7.11. Zmiana źródeł podczas wykonania
+
+Przed operacją modyfikującą branch lub PR orchestrator ponownie sprawdza istotne warunki:
+
+- Czy branch nadal istnieje i wskazuje oczekiwany commit.
+- Czy PR nadal jest otwarty.
+- Czy PR nie został w międzyczasie zmergowany.
+- Czy nie pojawiło się sprzeczne polecenie.
+- Czy zadanie nie zostało przejęte przez developera.
+
+Jeżeli warunki uległy zmianie, rozpoczęta operacja jest przerywana lub ponownie oceniana.
+
+Dotyczy to w szczególności publikacji commitów, zamykania PR, tworzenia tagów oraz parkowania.
+
+### 7.12. Raportowanie konfliktów
+
+Konflikt jest zdarzeniem diagnostycznym, **nie osobnym `golem_state`**.
+
+Dla issue z nierozstrzygniętym konfliktem orchestrator:
+
+1. Zachowuje ostatni potwierdzony stan.
+2. Rejestruje wykryte sprzeczności i ich źródła.
+3. Oznacza stan jako wymagający uzgodnienia w raporcie.
+4. Pomija issue przy wykonywaniu kolejnych operacji automatycznych.
+5. Ponownie oblicza stan po usunięciu przyczyny konfliktu.
+
+Raport powinien zawierać Jira key, ostatni potwierdzony `golem_state`, rodzaj konfliktu, powiązane PR-y i wymagane działanie.
+
+Po wyjaśnieniu konfliktu stan wyznaczany jest ponownie z rzeczywistych źródeł. Nie poprawia się go przez ręczne wpisanie nowej wartości `golem_state`.
+
+### 7.13. Niepowodzenia i przerwane wykonania
 
 Niepowodzenie pojedynczego wywołania AI nie ustanawia nowego `golem_state`.
 
@@ -562,8 +635,8 @@ PR labels nie są osobnymi stanami kanonicznymi.
 3. Ustawia `golem:clarification_needed`.
 4. Developer odpowiada przez komentarz, `suggestion` lub edycję.
 5. Developer ustawia `golem:continue`.
-6. Orchestrator uruchamia odpowiedni etap.
-7. Golem usuwa polecenie `continue` i aktualizuje label wynikowy.
+6. Orchestrator sprawdza spójność poleceń i uruchamia odpowiedni etap.
+7. Golem usuwa obsłużone polecenie i aktualizuje label wynikowy.
 
 ### 8.3. Review
 
@@ -581,7 +654,7 @@ Samo zgłoszenie uwag nie zmienia kanonicznego `golem_state: in_review`.
 
 Po przyjęciu polecenia jego obsługa zostaje zarejestrowana, a label usunięty. Kolejne uruchomienie nie powinno wykonywać ponownie tej samej operacji.
 
-Labels informacyjne są aktualizowane zgodnie z wynikiem przetwarzania.
+Przed przyjęciem polecenia orchestrator sprawdza, czy nie występuje konflikt opisany w sekcji 7.8.
 
 ### 8.5. Code ownership
 
@@ -659,13 +732,13 @@ Wznowienie jest operacją manualną.
 
 Operator wskazuje issue. Golem odczytuje Memory Bank `parked`, historyczny PR i ewentualny tag z kodem.
 
-Tworzy nowy branch na aktualnej bazie, a następnie wykonuje ponowną ocenę przez L2 lub L3.
+Tworzy nowy branch na aktualnej bazie i rejestruje nowy cykl pracy, a następnie wykonuje ponowną ocenę przez L2 lub L3.
 
-Dalszy `golem_state` wynika z rezultatu tej oceny. Samo wydanie polecenia resume nie oznacza zakończenia kolejnego etapu.
+Dalszy `golem_state` wynika z rezultatu tej oceny.
 
 ## 10. Selekcja Jira issues
 
-Orchestrator wybiera kandydatów na podstawie lokalnych metadata, Memory Banków i branchy Git.
+Orchestrator wybiera kandydatów na podstawie lokalnych metadata, Memory Banków, branchy Git i kanonicznego stanu.
 
 | Warunek | Zachowanie |
 |---|---|
@@ -673,14 +746,15 @@ Orchestrator wybiera kandydatów na podstawie lokalnych metadata, Memory Banków
 | Jira `In Progress` | Pominięcie |
 | Istnieje branch developerski dla issue | Pominięcie |
 | Istnieje aktywny branch AI | Obsługa jako rozpoczęte zadanie |
-| `golem_state: parking` | Oczekiwanie na zakończenie parkowania |
+| `golem_state: parking` | Obsługa trwającej procedury parkowania |
 | `golem_state: parked` | Pominięcie |
 | `golem_state: merged` | Pominięcie |
 | Jira `Done` | Pominięcie |
+| Wykryto nierozstrzygnięty konflikt stanu | Wstrzymanie operacji dla issue i zgłoszenie konfliktu |
 
 Do wznowienia zadania `parked` wymagane jest jawne polecenie operatora.
 
-Dostępność `golem_state` w raportach pozwala sprawdzić stan backlogu bez odczytywania historii poszczególnych wywołań AI.
+Nieaktualność indeksu nie jest samodzielnym powodem do blokowania issue, jeżeli aktualny stan można ustalić na podstawie źródeł.
 
 ## 11. Historia wykonania i koszty
 
@@ -698,9 +772,11 @@ Dla każdego wywołania AI Golem rejestruje:
 | PR URL | Powiązany Pull Request |
 | Error / Reason | Przyczyna niepowodzenia |
 
-Historia wykonania służy do rozliczalności, diagnostyki oraz pomiaru efektywności Golema.
+Historia wykonania obejmuje również rozpoczęcie parkowania, jego zakończenie, manualne wznowienie i wykryte konflikty stanu.
 
-Raport może łączyć historię prób z aktualnym kanonicznym `golem_state` danego issue.
+Każdy nowy cykl pracy jest powiązany z poprzednimi przez Jira key. Pozwala to odróżnić aktualne PR-y i zdarzenia od historii wcześniejszego parkowania.
+
+Raport łączy historię prób z aktualnym kanonicznym `golem_state` oraz ewentualnymi diagnostykami niespójności.
 
 ## 12. Uruchamianie procesu
 
@@ -713,6 +789,7 @@ Operator może zlecić:
 - Ponowne opracowanie issue.
 - Wznowienie parked issue.
 - Wygenerowanie raportu.
+- Ponowną ocenę issue po rozwiązaniu konfliktu stanu.
 
 Developerzy komunikują się z Golemem przede wszystkim przez GitHub PR. Nie potrzebują bezpośredniego dostępu do interfejsu orkiestratora.
 
@@ -728,6 +805,8 @@ Obsługa otwartych PR-ów przy odtwarzaniu `develop` jest elementem istniejącej
 
 Ponieważ Golem może zwiększyć liczbę otwartych PR-ów, należy wyraźnie uwzględnić je w dokumentacji tej procedury.
 
+Zamknięcie PR bez merge podczas release nie jest zdarzeniem `merged` ani `parked`. Orchestrator zachowuje historię PR i rozpoznaje potrzebę dalszej obsługi zgodnie z procedurą release.
+
 Przy release wykonywane jest także porządkowanie indeksów i taksonomii labels.
 
 ## 14. PoC i kryteria oceny
@@ -740,6 +819,8 @@ Przy release wykonywane jest także porządkowanie indeksów i taksonomii labels
 | B | L2 + GitHub PR | Analiza wymagań i komunikacja przez labels |
 | C | L3 + CI + review | Implementacja i ocena realnych rezultatów |
 | D | Parking + resume | Zachowanie analizy i kodu oraz wznowienie pracy |
+
+W ramach PoC należy również zweryfikować konflikty poleceń, nieoczekiwane zamknięcie PR oraz rozbieżności między stanem GitHub a Memory Bankiem.
 
 ### 14.2. Metryki
 
@@ -754,6 +835,7 @@ Raport Golema powinien pokazywać:
 - Issues zaparkowane (`parked`).
 - Koszt poszczególnych etapów.
 - Nakład pracy developerskiej wymagany do review i przyjęcia zmian.
+- Liczbę konfliktów stanu wymagających interwencji.
 
 **Główna metryka: liczba długo zalegających zadań faktycznie zrealizowanych i zdjętych z backlogu.**
 
@@ -772,6 +854,7 @@ Orchestrator odpowiada za selekcję, sterowanie, GitHub i rozliczalność. Claud
 - GitHub potwierdza rzeczywistą integrację implementacji.
 - Jira przechowuje status biznesowy zadania.
 - Historia Golema rejestruje próby, koszty i niepowodzenia.
+- Konflikty źródeł są raportowane i rozstrzygane bez zgadywania stanu.
 
 Niedokończone zadania mogą zakończyć się publikacją Memory Banku ze statusem `parked`. Niedokończony kod pozostaje dostępny przez trwały Git tag.
 
